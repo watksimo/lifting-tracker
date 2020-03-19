@@ -6,6 +6,7 @@ import argparse
 import cv2
 import imutils
 import time
+import math
 
 class ObjectTracker:
 	def __init__(self, lower_color, upper_color, video_file = None, buffer = 64):
@@ -15,10 +16,12 @@ class ObjectTracker:
 		self.video_file = video_file
 		self.buffer = buffer
 
-		self.pts = deque(maxlen=self.buffer)
+		self.center_pts = []
 		self.vs = None
 
 		self.angular_change = []
+
+		self.last_object_index = -1;
 
 	def init_video(self):
 		# if a video path was not supplied, grab the reference
@@ -80,6 +83,15 @@ class ObjectTracker:
 		else:
 			return False
 
+	def calculate_angle_change(self, detection_center):
+		if len(self.center_pts) > 1 and self.last_object_index != -1:
+			last_valid_position = self.center_pts[self.last_object_index]
+			angle_radians = math.atan2(last_valid_position[1]-detection_center[1], last_valid_position[0]-detection_center[0])
+			angle_degrees = int(math.degrees(angle_radians))
+			return angle_degrees
+		else:
+			return None
+
 	def process_video(self):
 		if self.vs is None:
 			print("ERROR: No video stream initialized.");
@@ -99,17 +111,28 @@ class ObjectTracker:
 			frame = imutils.resize(frame, width=600)
 			masked_frame = self.create_color_mask(frame)
 
-			mask_contour = self.get_largest_contour(masked_frame)
-			if mask_contour:
-				draw_circles = self.draw_circles(frame, mask_contour)
+			detection_contour = self.get_largest_contour(masked_frame)
 
-			# self.pts.append(mask_contour)
+			if detection_contour:	# No object detected
+				draw_circles = self.draw_circles(frame, detection_contour)
+				detection_center = detection_contour['center']
+
+				angle_change = self.calculate_angle_change(detection_center)
+				self.angular_change.append(angle_change)
+
+				self.center_pts.append(detection_center)
+				self.last_object_index = len(self.center_pts)-1
+			else:
+				self.center_pts.append(None)
+				self.angular_change.append(None)
 			
+			# Show the frame
 			cv2.imshow("mask", frame)
 
-			key = cv2.waitKey(1) & 0xFF
 			# if the 'q' key is pressed, stop the loop
+			key = cv2.waitKey(1) & 0xFF
 			if key == ord("q"):
+				print(self.angular_change)
 				break
 
 		# if we are not using a video file, stop the camera video stream
