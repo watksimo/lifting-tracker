@@ -7,21 +7,29 @@ import cv2
 import imutils
 import time
 import math
+from datetime import datetime
+from scipy.spatial import distance as dist
 
 class ObjectTracker:
 	def __init__(self, lower_color, upper_color, video_file = None, buffer = 64):
+
+		self.TENNIS_BALL_WIDTH = 32.85
 		self.lower_color = lower_color
 		self.upper_color = upper_color
 
 		self.video_file = video_file
 		self.buffer = buffer
 
-		self.center_pts = []
+		self.video_start_time = -1
+
 		self.vs = None
 
+		self.center_pts = []
 		self.angular_change = []
+		self.frame_time = []
+		self.distance_change = []
+		self.speed = []
 
-		self.last_object_index = -1;
 
 	def init_video(self):
 		# if a video path was not supplied, grab the reference
@@ -31,6 +39,8 @@ class ObjectTracker:
 		# otherwise, grab a reference to the video file
 		else:
 			self.vs = cv2.VideoCapture(self.video_file)
+
+		self.video_start_time = int(round(time.time() * 1000))
 
 	def create_color_mask(self, original_frame):
 		# resize the frame, blur it, and convert it to the HSV
@@ -83,14 +93,35 @@ class ObjectTracker:
 		else:
 			return False
 
-	def calculate_angle_change(self, detection_center):
-		if len(self.center_pts) > 1 and self.last_object_index != -1:
-			last_valid_position = self.center_pts[self.last_object_index]
-			angle_radians = math.atan2(last_valid_position[1]-detection_center[1], last_valid_position[0]-detection_center[0])
-			angle_degrees = int(math.degrees(angle_radians))
-			return angle_degrees
+	def calculate_angle_change(self):
+		prev_position = self.center_pts[-2]
+		current_position = self.center_pts[-1]
+		angle_radians = math.atan2(prev_position[1]-current_position[1], prev_position[0]-current_position[0])
+		angle_degrees = int(math.degrees(angle_radians))
+		return angle_degrees
+
+	def calculate_distance(self, mm_per_pixel):
+		prev_position = self.center_pts[-2]
+		current_position = self.center_pts[-1]
+		euclid_pixel_distance = dist.euclidean(prev_position, current_position)
+		euclid_mm_distance = euclid_pixel_distance * mm_per_pixel
+		return euclid_mm_distance
+
+	def calculate_speed(self):
+		time_delta = self.frame_time[-1] - self.frame_time[-2]
+		return self.distance_change[-1] / time_delta
+
+	def end_video(self):
+		# if we are not using a video file, stop the camera video stream
+		if not self.video_file:
+			self.vs.stop()
+		# otherwise, release the camera
 		else:
-			return None
+			self.vs.release()
+
+	def get_mm_per_pixel(self, radius, known_width):
+		return known_width / radius
+
 
 	def process_video(self):
 		if self.vs is None:
@@ -101,6 +132,7 @@ class ObjectTracker:
 		while True:
 			# grab the current frame
 			frame = self.vs.read()
+			frame_time = int(round(time.time() * 1000))
 			# handle the frame from VideoCapture or VideoStream
 			frame = frame[1] if self.video_file else frame
 			# if we are viewing a video and we did not grab a frame,
@@ -108,7 +140,7 @@ class ObjectTracker:
 			if frame is None:
 				break
 
-			frame = imutils.resize(frame, width=600)
+			frame = imutils.resize(frame, width=1000)
 			masked_frame = self.create_color_mask(frame)
 
 			detection_contour = self.get_largest_contour(masked_frame)
@@ -117,14 +149,18 @@ class ObjectTracker:
 				draw_circles = self.draw_circles(frame, detection_contour)
 				detection_center = detection_contour['center']
 
-				angle_change = self.calculate_angle_change(detection_center)
-				self.angular_change.append(angle_change)
-
 				self.center_pts.append(detection_center)
-				self.last_object_index = len(self.center_pts)-1
-			else:
-				self.center_pts.append(None)
-				self.angular_change.append(None)
+				self.frame_time.append(frame_time - self.video_start_time)
+
+				# Calculations need to be done after above inserts
+				if len(self.center_pts) > 1:
+					angle_change = self.calculate_angle_change()
+					self.angular_change.append(angle_change)
+
+					mm_per_pixel = self.get_mm_per_pixel(detection_contour['enclosing_circle']['radius'], self.TENNIS_BALL_WIDTH)
+					self.distance_change.append(self.calculate_distance(mm_per_pixel))
+
+					self.speed.append(self.calculate_speed())
 			
 			# Show the frame
 			cv2.imshow("mask", frame)
@@ -132,15 +168,10 @@ class ObjectTracker:
 			# if the 'q' key is pressed, stop the loop
 			key = cv2.waitKey(1) & 0xFF
 			if key == ord("q"):
-				print(self.angular_change)
 				break
 
-		# if we are not using a video file, stop the camera video stream
-		if not self.video_file:
-			self.vs.stop()
-		# otherwise, release the camera
-		else:
-			self.vs.release()
+		self.end_video()
+
 		# close all windows
 		cv2.destroyAllWindows()
 
