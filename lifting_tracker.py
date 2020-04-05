@@ -199,6 +199,3 @@ if __name__ == "__main__":
 	tracker = ObjectTracker((20, 80, 80), (80, 255, 255))
 
 	tracker.start_tracking()
-
-
-
